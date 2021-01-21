@@ -1,49 +1,31 @@
 import asyncio
+from asyncio.events import AbstractEventLoop
+import json
 from typing import Dict, Text, Any, Optional, Callable, Awaitable
 
 import pika
+from pika.adapters.asyncio_connection import AsyncioConnection
 from pika.channel import Channel
-from rasa.core.channels.channel import InputChannel, OutputChannel, UserMessage
+from pika.spec import Basic, BasicProperties
+from rasa.core.channels.channel import (
+    InputChannel,
+    UserMessage,
+    CollectingOutputChannel,
+)
 from sanic import Blueprint, response
+from sanic.app import Sanic
 from sanic.request import Request
 from sanic.response import HTTPResponse
 
 
 class RabbitMqJsonInput(InputChannel):
-    def __init__(self, host, port, vhost, user, password, input_queue_name):
-        loop = asyncio.get_running_loop()
+    def __init__(self, connection_uri, input_queue_name, prefetch_count):
+        self.input_queue_name = input_queue_name
+        self.connection_uri = connection_uri
+        self.prefetch_count = prefetch_count
 
-        self.setup_future = loop.create_future()
-        self.channel = None
-
-        def on_connected(connection):
-            connection.channel(on_open_callback=on_channel_open)
-
-        def on_channel_open(new_channel):
-            self.channel = new_channel
-            self.channel.queue_declare(
-                queue=input_queue_name,
-                durable=True,
-                exclusive=False,
-                auto_delete=False,
-                callback=on_queue_declared,
-            )
-
-        def on_queue_declared(frame):
-            self.channel.basic_consume(input_queue_name, self.handle_delivery)
-            self.setup_future.set_result(True)
-
-        is_default_parameters = user is password is None
-
-        parameters = (
-            pika.ConnectionParameters()
-            if is_default_parameters
-            else pika.PlainCredentials(user, password)
-        )
-
-        self.connection = pika.SelectConnection(
-            parameters, on_open_callback=on_connected
-        )
+        self.connection = None
+        self.blueprint_setup_future = asyncio.Future()
 
     @classmethod
     def name(cls) -> Text:
@@ -55,36 +37,159 @@ class RabbitMqJsonInput(InputChannel):
             cls.raise_missing_credentials_exception()
 
         return cls(
-            credentials.get("host"),
-            credentials.get("port"),
-            credentials.get("vhost"),
-            credentials.get("user"),
-            credentials.get("password"),
+            credentials.get("connection_uri"),
             credentials.get("input_queue_name"),
+            credentials.get("prefetch_count"),
         )
 
     def blueprint(
-        self, on_new_message: Callable[[UserMessage], Awaitable[Any]]
+        self, on_new_message: Callable[[UserMessage], Awaitable[Any]], app: Sanic
     ) -> Blueprint:
         empty_blueprint = Blueprint("rabbitmq_json_webhook", __name__)
 
-        @empty_blueprint.route("/", methods=["GET"])
+        print("blueprint!")
+
+        @empty_blueprint.get("/")
         async def health(_: Request) -> HTTPResponse:
             return response.json({"status": "ok"})
 
-        @empty_blueprint.route("/webhook", methods=["POST"])
+        @empty_blueprint.post("/webhook")
         async def receive(_: Request) -> HTTPResponse:
             return response.json({"status": "ok", "msg": "noop"})
 
+        print("setupping")
+        app.register_listener(
+            lambda _, loop: self._setup_connection(on_new_message, loop),
+            "after_server_start",
+        )
+        print("setupped")
+
         return empty_blueprint
 
-    def handle_delivery(channel: Channel, method, header, body):
-        print("channel", channel)
-        print("method", method)
-        print("header", header)
-        print("body", body)
-        pass
+    def _handle_delivery_with(
+        self,
+        on_new_message: Callable[[UserMessage], Awaitable[Any]],
+        loop: AbstractEventLoop,
+    ):
+        async def handle_delivery(
+            channel: Channel,
+            method: Basic.Deliver,
+            header: BasicProperties,
+            body: bytes,
+        ):
+            print("received message!!", body)
+            print("reply to", header.reply_to)
+
+            content_type = header.content_type
+            if not content_type == "application/json" or not header.reply_to:
+                channel.basic_ack(method.delivery_tag)
+                return
+
+            parsed = json.loads(body.decode("utf-8"))
+
+            sender_id = parsed["sender_id"]
+            message = parsed["message"]
+            input_channel = parsed.get("input_channel", self.name())
+            metadata = parsed.get("metadata", {})
+
+            output_collector = RabbitMqJsonOutput()
+
+            user_message = UserMessage(
+                message,
+                output_collector,
+                sender_id,
+                input_channel=input_channel,
+                metadata=metadata,
+            )
+
+            print("will run")
+            # run
+            await on_new_message(user_message)
+
+            print("outputs", output_collector.messages)
+            print("---")
+
+            output_messages = output_collector.messages
+            response = json.dumps(output_messages).encode("utf-8")
+            reply_to = header.reply_to
+            correlation_id = header.correlation_id
+
+            channel.basic_publish(
+                "",
+                reply_to,
+                response,
+                properties=pika.BasicProperties(
+                    content_type="application/json",
+                    delivery_mode=2,
+                    correlation_id=correlation_id,
+                ),
+            )
+
+            channel.basic_ack(method.delivery_tag)
+
+        def run_handle_delivery(
+            channel: Channel,
+            method: Basic.Deliver,
+            header: BasicProperties,
+            body: bytes,
+        ):
+            print("PUSHED")
+            loop.create_task(handle_delivery(channel, method, header, body))
+
+        return run_handle_delivery
+
+    def _setup_connection(
+        self,
+        on_new_message: Callable[[UserMessage], Awaitable[Any]],
+        loop: AbstractEventLoop,
+    ):
+        connection_uri = self.connection_uri
+        input_queue_name = self.input_queue_name
+
+        channel = None
+
+        def on_connected(connection):
+            print("connected!")
+            connection.channel(on_open_callback=on_channel_open)
+
+        def on_channel_open(new_channel: Channel):
+            global channel
+            print("channel open!!")
+            channel = new_channel
+
+            channel.basic_qos(prefetch_count=self.prefetch_count, callback=on_qos_ok)
+
+        def on_qos_ok(response):
+            global channel
+            print("prefetch set!!")
+
+            channel.queue_declare(
+                queue=input_queue_name,
+                durable=True,
+                exclusive=False,
+                auto_delete=False,
+                callback=on_queue_declared,
+            )
+
+        def on_queue_declared(frame):
+            global channel
+            print("queue declared *-*", channel)
+
+            channel.basic_consume(
+                self.input_queue_name, self._handle_delivery_with(on_new_message, loop)
+            )
+
+        parameters = pika.URLParameters(connection_uri)
+
+        print("connecting...")
+        connection = AsyncioConnection(
+            parameters, on_open_callback=on_connected, custom_ioloop=loop
+        )
+
+        self.connection = connection
+
+        return connection
 
 
-class RabbitMqJsonOutput(OutputChannel):
+class RabbitMqJsonOutput(CollectingOutputChannel):
     pass

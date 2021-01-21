@@ -1,0 +1,5 @@
+#!/bin/sh
+
+PYTHON_BIN=venv/bin/python
+
+PYTHONPATH=rasa/ $PYTHON_BIN rasa/rasa/__main__.py run --enable-api
