@@ -1,0 +1,4 @@
+[submodule "rasa"]
+	path = rasa
+	url = https://github.com/RasaHQ/rasa.git
+	branch = 2.2.x
