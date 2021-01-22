@@ -18,7 +18,7 @@ from sanic.request import Request
 from sanic.response import HTTPResponse
 
 
-class RabbitMqJsonInput(InputChannel):
+class AmqpJsonInput(InputChannel):
     def __init__(self, connection_uri, input_queue_name, prefetch_count):
         self.input_queue_name = input_queue_name
         self.connection_uri = connection_uri
@@ -29,7 +29,7 @@ class RabbitMqJsonInput(InputChannel):
 
     @classmethod
     def name(cls) -> Text:
-        return "rabbitmq_json"
+        return "amqp_json"
 
     @classmethod
     def from_credentials(cls, credentials: Optional[Dict[Text, Any]]) -> InputChannel:
@@ -45,7 +45,7 @@ class RabbitMqJsonInput(InputChannel):
     def blueprint(
         self, on_new_message: Callable[[UserMessage], Awaitable[Any]], app: Sanic
     ) -> Blueprint:
-        empty_blueprint = Blueprint("rabbitmq_json_webhook", __name__)
+        empty_blueprint = Blueprint("amqp_json_webhook", __name__)
 
         print("blueprint!")
 
@@ -92,7 +92,7 @@ class RabbitMqJsonInput(InputChannel):
             input_channel = parsed.get("input_channel", self.name())
             metadata = parsed.get("metadata", {})
 
-            output_collector = RabbitMqJsonOutput()
+            output_collector = AmqpJsonOutput()
 
             user_message = UserMessage(
                 message,
@@ -191,5 +191,5 @@ class RabbitMqJsonInput(InputChannel):
         return connection
 
 
-class RabbitMqJsonOutput(CollectingOutputChannel):
+class AmqpJsonOutput(CollectingOutputChannel):
     pass
