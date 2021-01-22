@@ -1,4 +1,3 @@
-import asyncio
 from asyncio.events import AbstractEventLoop
 import json
 from typing import Dict, Text, Any, Optional, Callable, Awaitable
@@ -25,7 +24,6 @@ class AmqpJsonInput(InputChannel):
         self.prefetch_count = prefetch_count
 
         self.connection = None
-        self.blueprint_setup_future = asyncio.Future()
 
     @classmethod
     def name(cls) -> Text:
