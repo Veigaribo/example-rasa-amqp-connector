@@ -47,8 +47,6 @@ class AmqpJsonInput(InputChannel):
     ) -> Blueprint:
         empty_blueprint = Blueprint("amqp_json_webhook", __name__)
 
-        print("blueprint!")
-
         @empty_blueprint.get("/")
         async def health(_: Request) -> HTTPResponse:
             return response.json({"status": "ok"})
@@ -57,12 +55,10 @@ class AmqpJsonInput(InputChannel):
         async def receive(_: Request) -> HTTPResponse:
             return response.json({"status": "ok", "msg": "noop"})
 
-        print("setupping")
         app.register_listener(
             lambda _, loop: self._setup_connection(on_new_message, loop),
             "after_server_start",
         )
-        print("setupped")
 
         return empty_blueprint
 
@@ -77,9 +73,6 @@ class AmqpJsonInput(InputChannel):
             header: BasicProperties,
             body: bytes,
         ):
-            print("received message!!", body)
-            print("reply to", header.reply_to)
-
             content_type = header.content_type
             if not content_type == "application/json" or not header.reply_to:
                 channel.basic_ack(method.delivery_tag)
@@ -102,12 +95,8 @@ class AmqpJsonInput(InputChannel):
                 metadata=metadata,
             )
 
-            print("will run")
             # run
             await on_new_message(user_message)
-
-            print("outputs", output_collector.messages)
-            print("---")
 
             output_messages = output_collector.messages
             response = json.dumps(output_messages).encode("utf-8")
@@ -133,7 +122,6 @@ class AmqpJsonInput(InputChannel):
             header: BasicProperties,
             body: bytes,
         ):
-            print("PUSHED")
             loop.create_task(handle_delivery(channel, method, header, body))
 
         return run_handle_delivery
@@ -149,19 +137,16 @@ class AmqpJsonInput(InputChannel):
         channel = None
 
         def on_connected(connection):
-            print("connected!")
             connection.channel(on_open_callback=on_channel_open)
 
         def on_channel_open(new_channel: Channel):
             global channel
-            print("channel open!!")
             channel = new_channel
 
             channel.basic_qos(prefetch_count=self.prefetch_count, callback=on_qos_ok)
 
         def on_qos_ok(response):
             global channel
-            print("prefetch set!!")
 
             channel.queue_declare(
                 queue=input_queue_name,
@@ -173,7 +158,6 @@ class AmqpJsonInput(InputChannel):
 
         def on_queue_declared(frame):
             global channel
-            print("queue declared *-*", channel)
 
             channel.basic_consume(
                 self.input_queue_name, self._handle_delivery_with(on_new_message, loop)
@@ -181,7 +165,6 @@ class AmqpJsonInput(InputChannel):
 
         parameters = pika.URLParameters(connection_uri)
 
-        print("connecting...")
         connection = AsyncioConnection(
             parameters, on_open_callback=on_connected, custom_ioloop=loop
         )
