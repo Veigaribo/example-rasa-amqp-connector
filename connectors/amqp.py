@@ -41,7 +41,7 @@ class AmqpJsonInput(InputChannel):
         )
 
     def blueprint(
-        self, on_new_message: Callable[[UserMessage], Awaitable[Any]], app: Sanic
+        self, on_new_message: Callable[[UserMessage], Awaitable[Any]]
     ) -> Blueprint:
         empty_blueprint = Blueprint("amqp_json_webhook", __name__)
 
@@ -53,12 +53,10 @@ class AmqpJsonInput(InputChannel):
         async def receive(_: Request) -> HTTPResponse:
             return response.json({"status": "ok", "msg": "noop"})
 
-        app.register_listener(
-            lambda _, loop: self._setup_connection(on_new_message, loop),
-            "after_server_start",
-        )
-
         return empty_blueprint
+
+    def on_agent_ready(self, on_new_message, app, loop):
+        self._setup_connection(on_new_message, loop)
 
     def _handle_delivery_with(
         self,
