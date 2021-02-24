@@ -40,6 +40,14 @@ class AmqpJsonInput(InputChannel):
             credentials.get("prefetch_count"),
         )
 
+    def setup(self, on_new_message, app, options):
+        super().setup(on_new_message, app, options)
+
+        app.register_listener(
+            lambda _, loop: self._setup_connection(on_new_message, loop),
+            "after_server_start",
+        )
+
     def blueprint(
         self, on_new_message: Callable[[UserMessage], Awaitable[Any]]
     ) -> Blueprint:
@@ -54,9 +62,6 @@ class AmqpJsonInput(InputChannel):
             return response.json({"status": "ok", "msg": "noop"})
 
         return empty_blueprint
-
-    def on_agent_ready(self, on_new_message, app, loop):
-        self._setup_connection(on_new_message, loop)
 
     def _handle_delivery_with(
         self,

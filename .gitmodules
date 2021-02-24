@@ -1,4 +1,4 @@
 [submodule "rasa"]
 	path = rasa
 	url = https://github.com/Veigaribo/rasa.git
-	branch = allow-non-http-input-channels2
+	branch = allow-non-http-input-channels
